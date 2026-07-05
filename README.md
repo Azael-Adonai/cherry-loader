@@ -4,6 +4,8 @@ A loading animation built from a real photograph — the full life of a cherry,
 from winter bud to blossom to ripe fruit to dried, arranged in a ring and
 brought to life with spring physics.
 
+**[▶ Live demo](https://azael-adonai.github.io/cherry-loader/)** · [seamless-loop capture mode](https://azael-adonai.github.io/cherry-loader/?loop) · [progress demo](https://azael-adonai.github.io/cherry-loader/?progress)
+
 ![Cherry season loop](exports/cherry_loop.webp)
 
 Every element is a sprite cut from one photo. Nothing is vector-redrawn:
