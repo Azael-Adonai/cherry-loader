@@ -76,8 +76,7 @@ loop-closure metric.
 
 ## Credits
 
-Photo and concept by **Salah Eddine El Moukhtari** — one cherry tree,
-photographed across a season. Animation engineered with
+Concept by **Esael**. Animation engineered with
 [Claude Code](https://claude.com/claude-code).
 
 ## License
