@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+debug_slice.png
+debug_mask.png
+exports/cherry_loop_alpha.mov

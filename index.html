@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cherry season — loading</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 42%, #fcfaf7 0%, #f4efe8 62%, #ebe3d8 100%);
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+  .stage {
+    position: fixed;
+    inset: 0;
+    opacity: 0;
+    transition: opacity .9s ease;
+  }
+  .stage.on { opacity: 1; }
+
+  /* zero-size anchor at the visual centre; scaled to fit the viewport */
+  .anchor {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+  }
+  .wheel {
+    position: absolute;
+    will-change: transform;
+  }
+  .wheel img {
+    position: absolute;
+    will-change: transform;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
+  }
+
+  .center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #8a7568;
+    opacity: 0;
+    transition: opacity 1.1s ease;
+  }
+  .center.on { opacity: 1; }
+  .pct {
+    font-size: 28px;
+    font-style: italic;
+    color: #6d5a4e;
+    letter-spacing: .04em;
+  }
+  .pct:empty { display: none; }
+
+  svg.arc {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    overflow: visible;
+  }
+  svg.arc circle {
+    fill: none;
+    stroke-linecap: round;
+  }
+  svg.arc .track { stroke: rgba(122, 31, 43, .10); stroke-width: 1.5; }
+  svg.arc .bar   { stroke: #7a1f2b; stroke-width: 2.5; transition: stroke-dashoffset .45s cubic-bezier(.3,.8,.3,1); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .word { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="anchor" id="anchor">
+    <div class="wheel" id="wheel"></div>
+  </div>
+  <svg class="arc" id="arc" width="180" height="180" style="display:none">
+    <circle class="track" cx="90" cy="90" r="86"></circle>
+    <circle class="bar" id="arcBar" cx="90" cy="90" r="86"></circle>
+  </svg>
+  <div class="center">
+    <div class="pct" id="pct"></div>
+  </div>
+</div>
+
+<script>
+(async function () {
+  const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const TAU = Math.PI * 2;
+  // every periodic component divides this master period, so the whole
+  // animation repeats exactly every LOOP_T seconds (a seamless loop)
+  const LOOP_T = 16;
+  const LOOPMODE = /[?&]loop/.test(location.search);
+
+  const meta = window.__CHERRY_META || await (await fetch('meta.json')).json();
+  const stage = document.getElementById('stage');
+  const anchor = document.getElementById('anchor');
+  const wheel = document.getElementById('wheel');
+
+  wheel.style.width = meta.W + 'px';
+  wheel.style.height = meta.H + 'px';
+  wheel.style.left = -meta.cx + 'px';
+  wheel.style.top = -meta.cy + 'px';
+  wheel.style.transformOrigin = meta.cx + 'px ' + meta.cy + 'px';
+
+  // deterministic per-item randomness, hashed by item index so external
+  // renderers (render_loop.py) can reproduce the exact same animation
+  const prand = (i, salt) => {
+    let x = (i * 374761393 + salt * 668265263 + 1013904223) >>> 0;
+    x = (x ^ (x >>> 13)) >>> 0;
+    x = Math.imul(x, 1274126177) >>> 0;
+    return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+  };
+
+  // draw order: lower on the photo = laid down later = on top
+  const items = meta.items.map((it, idx) => ({ it, idx }))
+    .sort((a, b) => a.it.gy - b.it.gy);
+
+  const nodes = [];
+  let spinnerCount = 0;
+  for (const { it, idx } of items) {
+    const img = new Image();
+    img.src = it.data || ('sprites/' + it.file);
+    img.alt = '';
+    img.style.left = it.x + 'px';
+    img.style.top = it.y + 'px';
+    img.style.width = it.w + 'px';
+    img.style.height = it.h + 'px';
+    img.style.transformOrigin = it.px + 'px ' + it.py + 'px';
+    img.style.transform = 'rotate(' + (it.rot || 0) + 'deg)';
+    if (!REDUCED) img.style.opacity = '0';
+    wheel.appendChild(img);
+
+    // stemless round heads (the open blossoms) get a slow pinwheel spin
+    const isFlower = it.stemLen < 1.9 * it.fruitR;
+
+    const L = Math.max(it.stemLen, 30);
+    nodes[idx] = {
+      el: img,
+      ang: it.ang,                                   // lifecycle angle, 0 = top, cw
+      f0: Math.min(2.6, Math.max(0.9, 1.9 * Math.sqrt(80 / L))),
+      zeta: 0.10 + prand(idx, 1) * 0.08,
+      gain: 13 * Math.min(1.6, Math.max(0.85, L / 140)) * (0.85 + 0.3 * prand(idx, 2)),
+      breezeA: 0.7 + prand(idx, 3) * 0.5,
+      // whole cycles per master loop, so the breeze loops seamlessly too
+      breezeF: (4 + Math.floor(prand(idx, 4) * 7)) / LOOP_T,
+      breezeP: prand(idx, 5) * TAU,
+      // exactly one pinwheel turn per master loop
+      spin: isFlower ? (spinnerCount++ % 2 ? -1 : 1) * 360 / LOOP_T : 0,
+      kick: (prand(idx, 6) < 0.5 ? -1 : 1) * (35 + prand(idx, 7) * 30),
+      gust: 105 * (0.7 + 0.6 * prand(idx, 8)),
+      rot: it.rot || 0,
+      ux: Math.sin(it.ang * Math.PI / 180),          // radial unit (outward)
+      uy: -Math.cos(it.ang * Math.PI / 180),
+      tanX: Math.cos(it.ang * Math.PI / 180),        // tangential unit (clockwise)
+      tanY: Math.sin(it.ang * Math.PI / 180),
+      m: Math.max(0.15, it.area / 9000),             // relative mass
+      wHalf: it.fruitR * 1.2,                        // contact half-width
+      radPx: it.rad,
+      fu: TAU * (0.75 + prand(idx, 9) * 0.6),        // tangential anchor spring
+      gustT: 175 * (0.7 + 0.6 * prand(idx, 10)),     // tangential gust push
+      u: 0,                                          // slide along the ring arc
+      uV: 0,
+      sway: 0,
+      swayV: 0,
+      exist: 0,                                      // collision width factor
+      cyc: -1,                                       // last cycle we entered in
+    };
+  }
+
+  // cycle choreography, repeated every master loop: the story starts at the
+  // flower bud, blooms, cascades clockwise into the full ring, lives, then
+  // leaves the same way — the element-by-element reveal marks each loop
+  const N = nodes.length;
+  const ENTRY_DUR = 0.55;
+  const EXIT_DUR = 0.5;
+  const spinnerIdx = nodes.map((n, i) => (n.spin ? i : -1)).filter(i => i >= 0);
+  const startIdx = spinnerIdx.length ? (Math.min(...spinnerIdx) - 1 + N) % N : 0;
+  nodes.forEach((n, i) => {
+    const k = (i - startIdx + N) % N;
+    n.delay = k < 3
+      ? 0.3 + 0.5 * k                      // deliberate opening: bud… bloom… bloom…
+      : 1.55 + 0.088 * (k - 3);            // then the season cascades around the ring
+    n.exitAt = 13.2 + 0.075 * k;           // and departs in the same clockwise order
+  });
+
+  // ring-adjacent contact pairs: the wheel's surges slide items along the
+  // arc, and neighbours resting shoulder-to-shoulder bump into each other.
+  // contact width follows each item's existence, so deaths open the chain
+  // and every rebirth shoves its neighbours apart.
+  const RESTITUTION = 0.35;
+  const pairs = [];
+  for (let i = 0; i < N; i++) {
+    const a = nodes[i], b = nodes[(i + 1) % N];
+    const arc = a.radPx * (2 * Math.PI / N);         // even angular spacing
+    pairs.push({ a, b, arc });
+  }
+  function collide() {
+    for (const p of pairs) {
+      const A = p.a, B = p.b;
+      const slack = Math.max(0, p.arc - A.wHalf * A.exist - B.wHalf * B.exist);
+      const pen = -(slack + B.u - A.u);
+      if (pen <= 0) continue;
+      const ms = A.m + B.m;
+      A.u -= pen * B.m / ms;
+      B.u += pen * A.m / ms;
+      const relV = B.uV - A.uV;
+      if (relV < 0) {
+        // resting contact stays soft; only real impacts bounce and clink
+        const hard = relV < -4;
+        const J = -(1 + (hard ? RESTITUTION : 0)) * relV * A.m * B.m / ms;
+        A.uV -= J / A.m;
+        B.uV += J / B.m;
+        if (hard) {
+          A.swayV += (J / A.m) * 1.4;                // the knock shivers the stems
+          B.swayV -= (J / B.m) * 1.4;
+          window.__bumps = (window.__bumps || 0) + 1;
+        }
+      }
+    }
+  }
+
+  // progress arc: sized to the ring's real inner clearance (stems included)
+  const pctEl = document.getElementById('pct');
+  const arc = document.getElementById('arc');
+  const bar = document.getElementById('arcBar');
+  const track = arc.querySelector('.track');
+  let prog = -1;
+  let arcCirc = 1;
+
+  function applyArc() {
+    if (prog < 0) return;
+    arc.style.display = '';
+    bar.style.strokeDashoffset = arcCirc * (1 - prog);
+    pctEl.textContent = Math.round(prog * 100) + '%';
+  }
+
+  // fit the wheel to the viewport
+  function fit() {
+    const k = Math.min(innerWidth, innerHeight) * 0.86 / Math.max(meta.W, meta.H);
+    anchor.style.transform = 'scale(' + k + ')';
+
+    const r = Math.max(64, ((meta.innerR || 340) - 40) * k);
+    const s = 2 * (r + 5);
+    arc.setAttribute('width', s);
+    arc.setAttribute('height', s);
+    for (const c of [track, bar]) {
+      c.setAttribute('cx', r + 5);
+      c.setAttribute('cy', r + 5);
+      c.setAttribute('r', r);
+    }
+    arcCirc = TAU * r;
+    bar.style.strokeDasharray = arcCirc;
+    bar.style.strokeDashoffset = arcCirc * (prog < 0 ? 1 : 1 - prog);
+    applyArc();
+  }
+  fit();
+  addEventListener('resize', fit);
+
+  // decode() may stall in hidden tabs — don't let it block initialisation
+  await Promise.race([
+    Promise.all(nodes.map(n => n.el.decode().catch(() => {}))),
+    new Promise(r => setTimeout(r, 2500)),
+  ]);
+  stage.classList.add('on');
+  setTimeout(() => document.querySelector('.center').classList.add('on'),
+    REDUCED ? 0 : 1400);
+
+  // ---------------- motion ----------------
+  // the ring never spins at constant speed: two slow surges layered on the
+  // base rotation give it living, breathing angular acceleration, and that
+  // acceleration is what makes every stem lag, whip and settle.
+  // one revolution per master loop; surge periods divide LOOP_T exactly
+  const OMEGA = 360 / LOOP_T;                        // deg/s base spin
+  const SURGES = [
+    { A: 4.0, T: LOOP_T / 6, p: 0.0 },
+    { A: 2.2, T: LOOP_T / 2, p: 2.1 },
+  ];
+  const theta = t => OMEGA * t +
+    SURGES.reduce((s, g) => s + g.A * Math.sin(TAU * t / g.T + g.p), 0);
+  const thetaAcc = t =>
+    SURGES.reduce((s, g) => s - g.A * Math.pow(TAU / g.T, 2) * Math.sin(TAU * t / g.T + g.p), 0);
+
+  // season wave phase-locked to the surge beat: one full sweep relative to
+  // the ring every two surge periods, so pulse and spin share one rhythm
+  const WAVE_SPEED = OMEGA + 360 / (2 * SURGES[0].T);
+  const WAVE_SIGMA = 26;                             // deg, width of the pulse
+
+  const wrap180 = a => ((a + 180) % 360 + 360) % 360 - 180;
+
+  // per-item existence over one cycle: hidden -> reveal pop -> alive ->
+  // farewell -> hidden. tau is the phase within the master loop.
+  const existAt = (n, tau) => {
+    const eIn = tau - n.delay;
+    const eOut = tau - n.exitAt;
+    if (eIn < 0 || eOut >= EXIT_DUR) return 0;
+    if (eIn < ENTRY_DUR) return eIn / ENTRY_DUR;
+    if (eOut >= 0) return 1 - eOut / EXIT_DUR;
+    return 1;
+  };
+
+  // physics runs on a fixed 120 Hz grid, decoupled from rendering: exactly
+  // 1920 steps per cycle, so kicks and collisions land at identical phases
+  // every loop and the whole system repeats deterministically
+  const PH = 1 / 120;
+  let physT = 0;
+
+  function physicsStep(tt) {
+    const acc0 = thetaAcc(tt);
+    const th0 = theta(tt);
+    const wh = ((tt * WAVE_SPEED) % 360 + 360) % 360;
+    const taup = ((tt % LOOP_T) + LOOP_T) % LOOP_T;
+    const cycp = Math.floor(tt / LOOP_T);
+    for (const n of nodes) {
+      n.exist = existAt(n, taup);
+      if (taup < n.delay || taup - n.exitAt >= EXIT_DUR) continue;
+      if (n.cyc !== cycp) {                          // fresh entry: land swinging
+        n.cyc = cycp;
+        n.swayV = Math.max(-160, Math.min(160, n.swayV + n.kick));
+        n.uV -= 20;
+      }
+      const d = wrap180(n.ang + th0 - wh);
+      const w = Math.exp(-(d * d) / (WAVE_SIGMA * WAVE_SIGMA));
+      const w0 = TAU * n.f0;
+      const a = -w0 * w0 * n.sway - 2 * n.zeta * w0 * n.swayV
+              - n.gain * acc0 + n.gust * w;
+      n.swayV += a * PH;
+      n.sway += n.swayV * PH;
+      const aU = -n.fu * n.fu * n.u - 2 * 0.22 * n.fu * n.uV
+               - acc0 * 0.017453 * 1.35 * n.radPx + n.gustT * w;
+      n.uV += aU * PH;
+      n.u += n.uV * PH;
+    }
+    collide();
+  }
+
+  function stepPhysicsTo(target) {
+    let guard = 4000;                                // cap catch-up after long stalls
+    while (physT + PH <= target && guard--) physT += PH, physicsStep(physT);
+    if (physT + PH <= target) physT = Math.floor(target / PH) * PH; // stay on grid
+  }
+
+  // capture mode (?loop): pre-settle into the periodic steady state, so ANY
+  // window of exactly LOOP_T seconds recorded from the screen loops perfectly
+  if (LOOPMODE && !REDUCED) {
+    physT = -3 * LOOP_T;
+    stepPhysicsTo(0);
+  }
+
+  const t0 = performance.now() / 1000;
+
+  function frame(nowMs) {
+    const t = nowMs / 1000 - t0;
+    stepPhysicsTo(t);
+
+    const th = theta(t);
+    // slow ambient breath so no frame of the loop is ever static
+    const breath = 1 + 0.006 * Math.sin(TAU * t / (LOOP_T / 2));
+    wheel.style.transform = 'rotate(' + th + 'deg) scale(' + breath + ')';
+
+    const waveHead = (t * WAVE_SPEED) % 360;
+    const tau = t % LOOP_T;                          // phase within the cycle
+
+    for (const n of nodes) {
+      const eIn = tau - n.delay;
+      const eOut = tau - n.exitAt;
+      if (eIn < 0 || eOut >= EXIT_DUR) {             // resting between cycles
+        n.el.style.opacity = 0;
+        continue;
+      }
+
+      // the season pulse travelling around the lifecycle
+      const d = wrap180(n.ang + th - waveHead);
+      const w = Math.exp(-(d * d) / (WAVE_SIGMA * WAVE_SIGMA));
+      const s = 1 + 0.05 * w;
+
+      const breeze = n.breezeA * Math.sin(TAU * n.breezeF * t + n.breezeP);
+      const spinA = n.spin * t;                      // blossoms pinwheel slowly
+
+      let sc = 1, op = 1, squash = 0;
+      let tx = n.tanX * n.u, ty = n.tanY * n.u;
+      if (eIn < ENTRY_DUR) {
+        // the element-by-element reveal that marks each loop
+        const r = eIn / ENTRY_DUR;
+        const q = r - 1;
+        sc = 0.45 + 0.55 * (1 + 2.70158 * q * q * q + 1.70158 * q * q);
+        const e = 1 - (1 - r) * (1 - r) * (1 - r);   // easeOutCubic
+        const r1 = 1 - e;
+        tx += n.ux * 24 * r1 + n.uy * 12 * r1 * r1;  // curved approach
+        ty += n.uy * 24 * r1 - n.ux * 12 * r1 * r1;
+        squash = 0.045 * Math.max(0, Math.sin((r - 0.3) / 0.7 * Math.PI));
+        op = Math.min(1, r / 0.5);
+      } else if (eOut >= 0) {
+        // the farewell: lift off and fade, same clockwise order
+        const q = eOut / EXIT_DUR;
+        sc = 1 - 0.45 * q * q;
+        op = Math.max(0, 1 - 1.2 * q * q);
+        const drift = 20 * q * q;
+        tx += n.ux * drift;
+        ty += n.uy * drift;
+      }
+
+      const S = s * sc;
+      n.el.style.opacity = op.toFixed(3);
+      n.el.style.transform =
+        'translate(' + tx + 'px,' + ty + 'px) ' +
+        'rotate(' + (n.rot + n.sway + breeze + spinA) + 'deg) ' +
+        'scale(' + (S * (1 + squash)) + ',' + (S * (1 - squash)) + ')';
+    }
+    requestAnimationFrame(frame);
+  }
+
+  if (!REDUCED) requestAnimationFrame(frame);
+
+  // the reveal recurs naturally at the top of every cycle — no replay needed
+
+  // ---------------- optional determinate progress ----------------
+  window.CherryLoader = {
+    set(p) {
+      prog = Math.min(1, Math.max(0, p));
+      applyArc();
+    },
+    done() {
+      this.set(1);
+      // farewell: a ripple of stem-swings runs once around the ring
+      nodes.forEach((n, i) => setTimeout(() => {
+        n.swayV = Math.max(-160, Math.min(160, n.swayV + n.kick * 1.6));
+      }, i * 28));
+      setTimeout(() => { stage.style.opacity = 0; }, 950);
+    },
+  };
+
+  if (location.search.includes('progress')) {
+    let p = 0;
+    const sim = setInterval(() => {
+      p = Math.min(1, p + Math.random() * 0.045);
+      CherryLoader.set(p);
+      if (p >= 1) {
+        clearInterval(sim);
+        CherryLoader.done();
+        setTimeout(() => location.reload(), 3200);
+      }
+    }, 180);
+  }
+})();
+</script>
+</body>
+</html>
